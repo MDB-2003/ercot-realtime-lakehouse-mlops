@@ -1,0 +1,15 @@
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+target/
+dbt_ercot/target/
+dbt_ercot/dbt_packages/
+dbt_ercot/logs/
+dbt_ercot/.user.yml
+models/*.pkl
+seed_spikes.py

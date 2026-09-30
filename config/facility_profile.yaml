@@ -1,0 +1,57 @@
+# Settlement and curtailment contract for the Houston Ship Channel olefins unit.
+# Physical curtailment authority stays in the deterministic dispatch layer.
+# An advisory language model is not permitted to change these limits or to trip load.
+
+facility:
+  name: "Houston Ship Channel Olefins Complex - Unit 3"
+  industry: "Continuous olefins and petrochemical manufacturing"
+  site: "Houston Ship Channel"
+  county: "Harris"
+  state: "TX"
+  utility_interconnect: "CenterPoint Energy 138 kV transmission"
+  location_hub: "HB_HOUSTON"
+  congestion_reference_hub: "HB_WEST"
+  weather_station:
+    latitude: 29.7350
+    longitude: -95.1200
+    county: "Harris"
+    nws_grid: "HGX"
+  power_limits:
+    total_baseline_load_mw: 50.0
+    critical_uninterruptible_load_mw: 30.0
+    max_curtailable_load_mw: 20.0
+  critical_process_loads:
+    - "Reactors"
+    - "Catalytic cooling loops"
+    - "Flares"
+  economics:
+    hourly_production_downtime_cost_usd: 6500.0
+    scarcity_threshold_usd_mwh: 250.0
+    spike_event_thresholds_usd_mwh: [250.0, 500.0, 1000.0, 5000.0]
+    # Planning value for the four summer coincident-peak transmission charge.
+    avoided_4cp_tariff_usd_per_mw_year: 54000.0
+  battery_storage:
+    chemistry: "LFP"
+    chemistry_name: "Lithium-iron-phosphate"
+    rated_power_mw: 10.0
+    rated_energy_mwh: 20.0
+    max_discharge_power_mw: 10.0
+    max_charge_power_mw: 10.0
+    roundtrip_efficiency: 0.88
+    min_soc_fraction: 0.15
+    max_soc_fraction: 1.0
+  curtailable_assets:
+    - name: "Air compressors"
+      shed_capacity_mw: 10.0
+      max_duration_hours: 3.0
+    - name: "Polymer pelletizers"
+      shed_capacity_mw: 6.0
+      max_duration_hours: 4.0
+    - name: "Secondary chillers"
+      shed_capacity_mw: 4.0
+      max_duration_hours: 6.0
+  dispatch_policy:
+    primary_scarcity_threshold_usd_mwh: 250.0
+    forecast_horizon_minutes_min: 60
+    forecast_horizon_minutes_max: 120
+    llm_may_authorize_curtailment: false

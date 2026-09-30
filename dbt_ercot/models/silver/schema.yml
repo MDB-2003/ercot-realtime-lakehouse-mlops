@@ -1,0 +1,59 @@
+version: 2
+
+models:
+  - name: stg_ercot_features
+    description: >
+      HB_HOUSTON SCED intervals with the 30-minute reserve delta, the Houston
+      minus West congestion spread, net-load acceleration, and spike labels.
+      Spike flags are 1 when the Houston LMP is strictly above the threshold.
+    columns:
+      - name: sced_timestamp_utc
+        tests: [not_null, unique]
+      - name: settlement_point
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["HB_HOUSTON"]
+      - name: lmp_hb_houston_usd_mwh
+        tests: [not_null]
+      - name: lmp_hb_west_usd_mwh
+        tests: [not_null]
+      - name: nodal_congestion_spread_usd_mwh
+        description: HB_HOUSTON LMP minus HB_WEST LMP, dollars per MWh.
+        tests: [not_null]
+      - name: operating_reserve_mw
+        tests: [not_null]
+      - name: reserve_depletion_velocity_mw_per_min
+        description: >
+          (PRC now minus PRC 30 minutes earlier) / 30. Negative means reserves
+          are falling. Null until six complete 5-minute steps are available.
+      - name: net_load_mw
+        tests: [not_null]
+      - name: net_load_acceleration_mw_per_min2
+        description: >
+          Change in net-load velocity per minute. Velocity is the 5-minute
+          net-load delta divided by 5.
+      - name: is_spike_250
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+      - name: is_spike_500
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+      - name: is_spike_1000
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+      - name: is_spike_5000
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false

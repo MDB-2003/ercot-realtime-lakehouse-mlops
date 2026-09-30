@@ -1,0 +1,17 @@
+name: ercot_lakehouse
+version: "1.0.0"
+config-version: 2
+profile: ercot_lakehouse
+
+model-paths: ["models"]
+target-path: target
+clean-targets:
+  - target
+  - dbt_packages
+  - logs
+
+models:
+  ercot_lakehouse:
+    silver:
+      +materialized: table
+      +tags: ["silver"]

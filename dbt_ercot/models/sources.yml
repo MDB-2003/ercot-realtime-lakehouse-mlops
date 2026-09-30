@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Raw ERCOT SCED telemetry landed by src/ingestion/load_snowflake_bronze.py.
+    database: "{{ env_var('SNOWFLAKE_DATABASE', 'HEALTHCARE_LAKEHOUSE') }}"
+    schema: BRONZE
+    tables:
+      - name: raw_ercot_telemetry
+        description: >
+          One row per settlement point per SCED interval. HB_HOUSTON and HB_WEST
+          LMPs from NP6-788-CD, with PRC, system demand, wind, solar, and the
+          Harris County heat index repeated onto both hub rows.
+        loaded_at_field: ingested_at_utc
+        freshness:
+          warn_after: {count: 30, period: minute}
+          error_after: {count: 180, period: minute}
+        columns:
+          - name: sced_timestamp_utc
+            description: SCED run timestamp stored as UTC in TIMESTAMP_NTZ.
+          - name: settlement_point
+          - name: lmp_usd_mwh
+          - name: operating_reserve_mw
+            description: Physical responsive capability in MW.
+          - name: net_load_mw
+            description: System demand minus wind minus solar.
+          - name: heat_index_f
+          - name: ingested_at_utc

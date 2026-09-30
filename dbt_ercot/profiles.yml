@@ -1,0 +1,17 @@
+# Credentials come from the environment. Run from the repository root:
+#   dbt run --project-dir dbt_ercot --profiles-dir dbt_ercot --select stg_ercot_features
+ercot_lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'ACCOUNTADMIN') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'HEALTHCARE_LAKEHOUSE') }}"
+      schema: SILVER
+      threads: 4
+      client_session_keep_alive: true
+      query_tag: ercot_lakehouse_dbt
