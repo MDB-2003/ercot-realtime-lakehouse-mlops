@@ -1,9 +1,8 @@
 """Land raw ERCOT telemetry in Snowflake bronze.
 
 Target: ``{SNOWFLAKE_DATABASE}.BRONZE.RAW_ERCOT_TELEMETRY``. The database defaults
-to ``HEALTHCARE_LAKEHOUSE`` when ``SNOWFLAKE_DATABASE`` is unset, which is the
-account database this project is configured to share. Override it with
-``ERCOT_LAKEHOUSE`` when that database exists.
+to ``ERCOT_LAKEHOUSE``. Set ``SNOWFLAKE_ROLE`` to a role that can merge bronze
+and read silver. Do not rely on ACCOUNTADMIN outside a personal demo.
 
 Rows are merged on ``(SCED_TIMESTAMP_UTC, SETTLEMENT_POINT)``. The connection is
 opened with ``client_session_keep_alive=True``. Simulator rows are loaded with
@@ -114,7 +113,7 @@ def load_bronze(
         raise ValueError("a bronze batch must not mix authoritative and simulator rows")
 
     load_environment()
-    database = _identifier(os.environ.get("SNOWFLAKE_DATABASE", "HEALTHCARE_LAKEHOUSE"), "SNOWFLAKE_DATABASE")
+    database = _identifier(os.environ.get("SNOWFLAKE_DATABASE", "ERCOT_LAKEHOUSE"), "SNOWFLAKE_DATABASE")
     schema = _identifier(os.environ.get("SNOWFLAKE_SCHEMA", "BRONZE"), "SNOWFLAKE_SCHEMA")
     source = next(iter(sources))
     authoritative = next(iter(authoritative_flags))

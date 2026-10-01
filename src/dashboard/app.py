@@ -1,9 +1,8 @@
-"""Houston hub desk: latest silver telemetry, spike probability, and SHAP plots.
+"""Houston hub desk: latest silver telemetry, a 60-minute spike probability, and SHAP.
 
 Telemetry is the newest row in ``ERCOT_LAKEHOUSE.SILVER.STG_ERCOT_FEATURES``.
-Probabilities come from the FastAPI service. Waterfall and force plots are drawn
-from ``models/explainer.pkl`` so the figure is the saved TreeExplainer, not a
-second model. The probability does not close a breaker.
+``/predict`` and ``/explain`` on the FastAPI service are the only score path.
+The waterfall is drawn from that explain payload. The probability does not close a breaker.
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ from dotenv import load_dotenv
 from src.api.schemas import SPIKE_FEATURE_COLUMNS
 
 API_BASE = os.environ.get("ERCOT_API_BASE", "http://127.0.0.1:8000").rstrip("/")
-EXPLAINER_PATH = REPO_ROOT / "models" / "explainer.pkl"
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 _LABELS = {
     "lmp_hb_houston_usd_mwh": "Houston LMP ($/MWh)",
@@ -59,7 +57,7 @@ def _identifier(value: str) -> str:
 
 
 def _feature_table() -> str:
-    database = _identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", "ERCOT_LAKEHOUSE"))
+    database = _identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", os.environ.get("SNOWFLAKE_DATABASE", "ERCOT_LAKEHOUSE")))
     schema = _identifier(os.environ.get("SNOWFLAKE_FEATURE_SCHEMA", "SILVER"))
     table = _identifier(os.environ.get("SNOWFLAKE_FEATURE_TABLE", "STG_ERCOT_FEATURES"))
     return f"{database}.{schema}.{table}"
@@ -83,7 +81,9 @@ def latest_silver_row() -> tuple[dict[str, object] | None, str | None]:
             user=os.environ["SNOWFLAKE_USER"],
             password=os.environ["SNOWFLAKE_PASSWORD"],
             warehouse=_identifier(os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH")),
-            database=_identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", "ERCOT_LAKEHOUSE")),
+            database=_identifier(
+                os.environ.get("SNOWFLAKE_FEATURE_DATABASE", os.environ.get("SNOWFLAKE_DATABASE", "ERCOT_LAKEHOUSE"))
+            ),
             schema=_identifier(os.environ.get("SNOWFLAKE_FEATURE_SCHEMA", "SILVER")),
             role=os.environ.get("SNOWFLAKE_ROLE", "").strip() or None,
             client_session_keep_alive=True,
@@ -173,32 +173,38 @@ def _post_json(path: str, features: dict[str, float], threshold: float) -> tuple
     return body, None
 
 
-def _render_shap(features: dict[str, float]) -> None:
-    if not EXPLAINER_PATH.is_file():
-        st.error(f"Missing explainer artifact at {EXPLAINER_PATH.name}")
+def _render_explanation(explanation: dict[str, object]) -> None:
+    """Draw the /explain payload. This process does not load a second model."""
+
+    contributions = explanation.get("contributions")
+    if not isinstance(contributions, list) or not contributions:
         return
     import matplotlib.pyplot as plt
-    import pandas as pd
-    import shap
 
-    explainer = _load_explainer()
-    frame = pd.DataFrame([features], columns=list(SPIKE_FEATURE_COLUMNS))
-    explanation = explainer(frame)
-    st.subheader("SHAP waterfall")
-    shap.plots.waterfall(explanation[0], max_display=len(SPIKE_FEATURE_COLUMNS), show=False)
-    st.pyplot(plt.gcf(), clear_figure=True)
-    st.subheader("SHAP force")
-    shap.plots.force(explanation[0], matplotlib=True, show=False)
-    st.pyplot(plt.gcf(), clear_figure=True)
+    names = [str(row["feature_name"]) for row in contributions if isinstance(row, dict)]
+    values = [float(row["shap_value"]) for row in contributions if isinstance(row, dict)]
+    base = float(explanation.get("base_value", 0.0))
+    figure, axis = plt.subplots(figsize=(10, 4.2))
+    running = base
+    for index, value in enumerate(values):
+        axis.bar(index, value, bottom=running, color="#9a3b32" if value >= 0 else "#2f5d73")
+        running += value
+    axis.axhline(base, color="#666666", linewidth=0.8, linestyle="--")
+    axis.set_xticks(range(len(names)))
+    axis.set_xticklabels(names, rotation=30, ha="right")
+    axis.set_ylabel("P(spike within 60 min)")
+    axis.set_title("SHAP waterfall from /explain")
+    figure.tight_layout()
+    st.pyplot(figure, clear_figure=True)
 
-
-@st.cache_resource(show_spinner=False)
-def _load_explainer() -> object:
-    import joblib
-    import lightgbm  # noqa: F401
-    import shap  # noqa: F401
-
-    return joblib.load(EXPLAINER_PATH)
+    force, force_axis = plt.subplots(figsize=(10, 4.2))
+    colors = ["#9a3b32" if value >= 0 else "#2f5d73" for value in values]
+    force_axis.barh(names[::-1], values[::-1], color=colors[::-1])
+    force_axis.axvline(0.0, color="#666666", linewidth=0.8)
+    force_axis.set_xlabel("SHAP contribution to P(spike within 60 min)")
+    force_axis.set_title("SHAP force from /explain")
+    force.tight_layout()
+    st.pyplot(force, clear_figure=True)
 
 
 def main() -> None:
@@ -206,7 +212,10 @@ def main() -> None:
 
     st.set_page_config(page_title="HB_HOUSTON Spike Desk", layout="wide")
     st.title("HB_HOUSTON spike desk")
-    st.caption("Settlement hub HB_HOUSTON. The spike probability is advisory. Curtailment stays on the dispatch rules.")
+    st.caption(
+        "Settlement hub HB_HOUSTON. The score is P(LMP > $250/MWh within 60 minutes). "
+        "Curtailment stays on the dispatch rules."
+    )
 
     snapshot, source_error = latest_silver_row()
     defaults = dict(_DEFAULTS)
@@ -266,7 +275,7 @@ def main() -> None:
         probability = float(prediction["probability_spike_250"])
         alert = bool(prediction["spike_alert"])
         left, right = st.columns(2)
-        left.metric("P(LMP > $250/MWh)", f"{probability:.4f}")
+        left.metric("P(spike within 60 min)", f"{probability:.4f}")
         right.metric("Spike alert", "ALERT" if alert else "clear")
     if last.get("explain_error"):
         st.error(str(last["explain_error"]))
@@ -274,12 +283,10 @@ def main() -> None:
     if isinstance(explanation, dict) and isinstance(explanation.get("contributions"), list):
         st.subheader("Feature contributions")
         st.dataframe(explanation["contributions"], hide_index=True)
-    scored_features = last.get("features")
-    if isinstance(scored_features, dict):
         try:
-            _render_shap({name: float(scored_features[name]) for name in SPIKE_FEATURE_COLUMNS})
+            _render_explanation(explanation)
         except Exception as exc:
-            st.error(f"Local explainer plot failed ({exc.__class__.__name__})")
+            st.error(f"Explain plot failed ({exc.__class__.__name__})")
 
 
 main()

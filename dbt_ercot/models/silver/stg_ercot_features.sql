@@ -17,7 +17,13 @@
     Velocity is (net_load_t - net_load_t-1) / 5. Acceleration divides the next
     velocity delta by 5 again, so the unit is MW per minute squared.
 
-    Spike labels use a strict greater-than test against 250, 500, 1000, and 5000.
+    Same-row spike flags use a strict greater-than test against 250, 500, 1000,
+    and 5000. Those flags are not model targets. is_spike_250_within_60min is 1
+    when any later SCED timestamp in (t+5 minutes, t+60 minutes] prints a Houston
+    LMP above $250. The label is null unless that window is actually observed:
+    the next point is at most 10 minutes ahead, and some point reaches at least
+    55 minutes ahead. The window is partitioned by source, so a simulator
+    price cannot label an ercot_live interval. The open tail stays unlabeled.
 */
 
 with source_rows as (
@@ -157,6 +163,66 @@ with_acceleration as (
             order by with_velocity.sced_timestamp_utc
         ) as acceleration_prior_timestamp
     from with_velocity
+),
+
+realized as (
+    select
+        sced_timestamp_utc,
+        interval_start_utc,
+        interval_end_utc,
+        repeated_hour_flag,
+        settlement_point,
+        lmp_hb_houston_usd_mwh,
+        lmp_hb_west_usd_mwh,
+        nodal_congestion_spread_usd_mwh,
+        operating_reserve_mw,
+        reserve_depletion_velocity_mw_per_min,
+        system_demand_mw,
+        wind_generation_mw,
+        solar_generation_mw,
+        net_load_mw,
+        net_load_velocity_mw_per_min,
+        case
+            when net_load_velocity_mw_per_min is not null
+                and net_load_velocity_prior is not null
+                and datediff('second', acceleration_prior_timestamp, sced_timestamp_utc) between 4 * 60 and 6 * 60
+                then (net_load_velocity_mw_per_min - net_load_velocity_prior) / 5.0
+            else null
+        end as net_load_acceleration_mw_per_min2,
+        heat_index_f,
+        temperature_f,
+        relative_humidity_pct,
+        eea_level,
+        grid_state,
+        hour_ct,
+        source,
+        case when lmp_hb_houston_usd_mwh > 250 then 1 else 0 end as is_spike_250,
+        case when lmp_hb_houston_usd_mwh > 500 then 1 else 0 end as is_spike_500,
+        case when lmp_hb_houston_usd_mwh > 1000 then 1 else 0 end as is_spike_1000,
+        case when lmp_hb_houston_usd_mwh > 5000 then 1 else 0 end as is_spike_5000,
+        date_part(epoch_second, sced_timestamp_utc) as sced_epoch
+    from with_acceleration
+),
+
+forward_window as (
+    select
+        realized.*,
+        max(is_spike_250) over (
+            partition by source
+            order by sced_epoch
+            range between 300 following and 3600 following
+        ) as spike_flag_within_60min,
+        min(sced_epoch) over (
+            partition by source
+            order by sced_epoch
+            range between 300 following and 3600 following
+        ) as first_future_epoch,
+        max(sced_epoch) over (
+            partition by source
+            order by sced_epoch
+            range between 300 following and 3600 following
+        ) as last_future_epoch
+    from realized
 )
 
 select
@@ -175,13 +241,7 @@ select
     solar_generation_mw,
     net_load_mw,
     net_load_velocity_mw_per_min,
-    case
-        when net_load_velocity_mw_per_min is not null
-            and net_load_velocity_prior is not null
-            and datediff('second', acceleration_prior_timestamp, sced_timestamp_utc) between 4 * 60 and 6 * 60
-            then (net_load_velocity_mw_per_min - net_load_velocity_prior) / 5.0
-        else null
-    end as net_load_acceleration_mw_per_min2,
+    net_load_acceleration_mw_per_min2,
     heat_index_f,
     temperature_f,
     relative_humidity_pct,
@@ -189,8 +249,14 @@ select
     grid_state,
     hour_ct,
     source,
-    case when lmp_hb_houston_usd_mwh > 250 then 1 else 0 end as is_spike_250,
-    case when lmp_hb_houston_usd_mwh > 500 then 1 else 0 end as is_spike_500,
-    case when lmp_hb_houston_usd_mwh > 1000 then 1 else 0 end as is_spike_1000,
-    case when lmp_hb_houston_usd_mwh > 5000 then 1 else 0 end as is_spike_5000
-from with_acceleration
+    is_spike_250,
+    is_spike_500,
+    is_spike_1000,
+    is_spike_5000,
+    case
+        when first_future_epoch is null then null
+        when first_future_epoch - sced_epoch > 600 then null
+        when last_future_epoch - sced_epoch < 3300 then null
+        else spike_flag_within_60min
+    end as is_spike_250_within_60min
+from forward_window

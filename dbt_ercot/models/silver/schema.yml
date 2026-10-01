@@ -5,7 +5,9 @@ models:
     description: >
       HB_HOUSTON SCED intervals with the 30-minute reserve delta, the Houston
       minus West congestion spread, net-load acceleration, and spike labels.
-      Spike flags are 1 when the Houston LMP is strictly above the threshold.
+      Same-row flags are 1 when that interval's Houston LMP is strictly above
+      the threshold. is_spike_250_within_60min looks forward 60 minutes and is
+      the classifier target.
     columns:
       - name: sced_timestamp_utc
         tests: [not_null, unique]
@@ -54,6 +56,15 @@ models:
       - name: is_spike_5000
         tests:
           - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+      - name: is_spike_250_within_60min
+        description: >
+          1 when any HB_HOUSTON LMP in the next 5 to 60 minutes is above $250.
+          Null when that future window has not been observed yet. This is the
+          training label. is_spike_250 on the same row is not.
+        tests:
           - accepted_values:
               values: [0, 1]
               quote: false

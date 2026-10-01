@@ -1,7 +1,8 @@
 """Train the HB_HOUSTON spike classifier from the Snowflake silver feature table.
 
-The label is ``IS_SPIKE_250`` on the current SCED interval. Walk-forward
-``TimeSeriesSplit`` keeps every test row strictly after its training rows.
+The label is ``IS_SPIKE_250_WITHIN_60MIN``: a Houston LMP above $250 on a later
+SCED interval inside the next hour. The same-row price flag is not the target.
+Walk-forward ``TimeSeriesSplit`` keeps every test row strictly after its training rows.
 ``scale_pos_weight`` is the negative-to-positive ratio of that training split
 only, so the class weight does not see future scarcity events.
 
@@ -28,7 +29,7 @@ from dotenv import load_dotenv
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 
-from src.api.schemas import SPIKE_FEATURE_COLUMNS
+from src.api.schemas import SPIKE_FEATURE_COLUMNS, SPIKE_FORECAST_HORIZON_MINUTES, SPIKE_TARGET_COLUMN
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", "4")
@@ -40,7 +41,7 @@ MODEL_VERSION = "1"
 N_SPLITS = 5
 MIN_BOTH_CLASS_FOLDS = 3
 BACKGROUND_ROWS = 200
-TARGET_COLUMN = "is_spike_250"
+TARGET_COLUMN = SPIKE_TARGET_COLUMN
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = REPO_ROOT / "models" / "spike_lgb_v1.pkl"
@@ -57,9 +58,9 @@ SELECT
     heat_index_f,
     hour_ct AS hour_of_day,
     DAYOFWEEKISO(CONVERT_TIMEZONE('UTC', 'America/Chicago', sced_timestamp_utc)) - 1 AS day_of_week,
-    is_spike_250
+    is_spike_250_within_60min
 FROM {table}
-WHERE source IN ('ercot_live', 'simulator')
+WHERE source = 'ercot_live'
   AND reserve_depletion_velocity_mw_per_min IS NOT NULL
   AND temperature_f IS NOT NULL
   AND heat_index_f IS NOT NULL
@@ -67,7 +68,7 @@ WHERE source IN ('ercot_live', 'simulator')
   AND lmp_hb_houston_usd_mwh IS NOT NULL
   AND lmp_hb_west_usd_mwh IS NOT NULL
   AND operating_reserve_mw IS NOT NULL
-  AND is_spike_250 IS NOT NULL
+  AND is_spike_250_within_60min IS NOT NULL
 ORDER BY sced_timestamp_utc
 """
 
@@ -89,7 +90,7 @@ def train(
     target = frame[TARGET_COLUMN].astype(int).to_numpy()
     _require_trainable_sample(frame, target, n_splits)
 
-    fold_metrics = _cross_validate(features, target, n_splits)
+    fold_metrics = _cross_validate(features, target, frame["sced_timestamp_utc"], n_splits)
     usable = [row for row in fold_metrics if row["both_classes"]]
     if len(usable) < MIN_BOTH_CLASS_FOLDS:
         raise TrainingDataError(
@@ -117,6 +118,7 @@ def train(
         "trained_at_utc": trained_at.isoformat(),
         "feature_columns": list(SPIKE_FEATURE_COLUMNS),
         "target": TARGET_COLUMN,
+        "horizon_minutes": SPIKE_FORECAST_HORIZON_MINUTES,
         "scale_pos_weight": scale_pos_weight,
         "n_rows": int(len(frame)),
         "n_positives": positives,
@@ -190,27 +192,30 @@ def _empty_feature_reason(table: str) -> str:
                 SELECT
                     COUNT(*),
                     COUNT(reserve_depletion_velocity_mw_per_min),
-                    COALESCE(SUM(IFF(is_spike_250 = 1, 1, 0)), 0),
+                    COUNT(is_spike_250_within_60min),
+                    COALESCE(SUM(IFF(is_spike_250_within_60min = 1, 1, 0)), 0),
                     MIN(lmp_hb_houston_usd_mwh),
                     MAX(lmp_hb_houston_usd_mwh)
                 FROM {table}
-                WHERE source IN ('ercot_live', 'simulator')
+                WHERE source = 'ercot_live'
                 """
             )
-            count, with_velocity, positives, price_min, price_max = cursor.fetchone()
+            count, with_velocity, labeled, positives, price_min, price_max = cursor.fetchone()
     except Exception:
-        count = with_velocity = positives = price_min = price_max = None
+        count = with_velocity = labeled = positives = price_min = price_max = None
     finally:
         connection.close()
     if count is not None:
         diagnosis = (
             f"{table} has {count} ercot_live rows, {with_velocity} with reserve velocity, "
-            f"and {positives} IS_SPIKE_250 positives. "
+            f"{labeled} with a complete 60-minute forward window, "
+            f"and {positives} IS_SPIKE_250_WITHIN_60MIN positives. "
             f"Houston LMP ranged from {price_min} to {price_max} $/MWh"
         )
     return (
-        f"{diagnosis}. Reserve velocity stays null until six consecutive 5-minute SCED intervals exist, "
-        "and PR-AUC requires at least one Houston LMP above $250/MWh. No artifact was saved."
+        f"{diagnosis}. The label stays null until 60 minutes of later SCED intervals exist, "
+        "and PR-AUC needs both a future spike and a future non-spike. "
+        "Same-row prices above $250 are not used as the target. No artifact was saved."
     )
 
 
@@ -223,9 +228,7 @@ def load_environment() -> None:
 
 
 def _feature_table_fqn() -> str:
-    # SNOWFLAKE_DATABASE in this account is the shared healthcare lakehouse.
-    # The ERCOT feature mart is a separate database unless the operator overrides it.
-    database = _identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", "ERCOT_LAKEHOUSE"))
+    database = _identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", os.environ.get("SNOWFLAKE_DATABASE", "ERCOT_LAKEHOUSE")))
     schema = _identifier(os.environ.get("SNOWFLAKE_FEATURE_SCHEMA", "SILVER"))
     table = _identifier(os.environ.get("SNOWFLAKE_FEATURE_TABLE", "STG_ERCOT_FEATURES"))
     return f"{database}.{schema}.{table}"
@@ -246,7 +249,7 @@ def _connect():
             user=os.environ["SNOWFLAKE_USER"],
             password=os.environ["SNOWFLAKE_PASSWORD"],
             warehouse=warehouse,
-            database=_identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", "ERCOT_LAKEHOUSE")),
+            database=_identifier(os.environ.get("SNOWFLAKE_FEATURE_DATABASE", os.environ.get("SNOWFLAKE_DATABASE", "ERCOT_LAKEHOUSE"))),
             schema=_identifier(os.environ.get("SNOWFLAKE_FEATURE_SCHEMA", "SILVER")),
             role=role or None,
             client_session_keep_alive=True,
@@ -267,7 +270,7 @@ def _require_trainable_sample(frame: pd.DataFrame, target: np.ndarray, n_splits:
     price_max = float(frame["lmp_hb_houston_usd_mwh"].max())
     if positives == 0 or negatives == 0:
         raise TrainingDataError(
-            f"IS_SPIKE_250 has {positives} positives and {negatives} negatives "
+            f"IS_SPIKE_250_WITHIN_60MIN has {positives} positives and {negatives} negatives "
             f"from {start} to {end}. Houston LMP ranged from {price_min:.2f} to {price_max:.2f} $/MWh. "
             "PR-AUC, ROC-AUC, and scale_pos_weight need both classes, so no artifact was saved."
         )
@@ -277,10 +280,25 @@ def _require_trainable_sample(frame: pd.DataFrame, target: np.ndarray, n_splits:
         )
 
 
-def _cross_validate(features: pd.DataFrame, target: np.ndarray, n_splits: int) -> list[dict[str, object]]:
+def _cross_validate(
+    features: pd.DataFrame,
+    target: np.ndarray,
+    timestamps: pd.Series,
+    n_splits: int,
+) -> list[dict[str, object]]:
+    """Score walk-forward folds with a 60-minute embargo.
+
+    A training label looks up to 60 minutes ahead, so rows whose forward window
+    reaches into the test interval are dropped before the fit.
+    """
+
     splitter = TimeSeriesSplit(n_splits=n_splits)
     scored: list[dict[str, object]] = []
+    horizon = pd.Timedelta(minutes=SPIKE_FORECAST_HORIZON_MINUTES)
     for fold_index, (train_index, test_index) in enumerate(splitter.split(features)):
+        test_start = pd.Timestamp(timestamps.iloc[test_index].min())
+        train_ok = pd.to_datetime(timestamps.iloc[train_index]) + horizon < test_start
+        train_index = train_index[train_ok.to_numpy()]
         y_train = target[train_index]
         y_test = target[test_index]
         train_positives = int(y_train.sum())

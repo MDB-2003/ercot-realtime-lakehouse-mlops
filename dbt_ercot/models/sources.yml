@@ -3,7 +3,7 @@ version: 2
 sources:
   - name: bronze
     description: Raw ERCOT SCED telemetry landed by src/ingestion/load_snowflake_bronze.py.
-    database: "{{ env_var('SNOWFLAKE_DATABASE', 'HEALTHCARE_LAKEHOUSE') }}"
+    database: "{{ env_var('SNOWFLAKE_DATABASE', 'ERCOT_LAKEHOUSE') }}"
     schema: BRONZE
     tables:
       - name: raw_ercot_telemetry

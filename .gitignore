@@ -1,5 +1,6 @@
 .env
 .env.*
+!.env.example
 .venv/
 venv/
 __pycache__/
@@ -12,4 +13,3 @@ dbt_ercot/dbt_packages/
 dbt_ercot/logs/
 dbt_ercot/.user.yml
 models/*.pkl
-seed_spikes.py

@@ -19,6 +19,8 @@ from fastapi import FastAPI, HTTPException, Query
 
 from src.api.schemas import (
     SPIKE_FEATURE_COLUMNS,
+    SPIKE_FORECAST_HORIZON_MINUTES,
+    SPIKE_TARGET_COLUMN,
     DispatchSimulationRequest,
     ExplainResponse,
     FeatureAttribution,
@@ -94,6 +96,7 @@ def predict(
         probability_spike_250=probability,
         spike_alert=probability >= decision_threshold,
         decision_threshold=decision_threshold,
+        horizon_minutes=SPIKE_FORECAST_HORIZON_MINUTES,
     )
 
 
@@ -115,6 +118,7 @@ def explain(features: SpikeFeatureVector) -> ExplainResponse:
     return ExplainResponse(
         model_name=str(artifact.get("model_name", MODEL_NAME)),
         probability_spike_250=probability,
+        horizon_minutes=SPIKE_FORECAST_HORIZON_MINUTES,
         base_value=base_value,
         contributions=contributions,
     )
@@ -209,6 +213,14 @@ def _load_artifacts() -> tuple[dict[str, object], object]:
         columns = list(bundle.get("feature_columns", []))
         if columns != list(SPIKE_FEATURE_COLUMNS):
             raise HTTPException(status_code=503, detail="Saved model features do not match the serving contract.")
+        if bundle.get("target") != SPIKE_TARGET_COLUMN or int(bundle.get("horizon_minutes", 0)) != SPIKE_FORECAST_HORIZON_MINUTES:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Saved model is not the 60-minute forward spike classifier. "
+                    "Retrain with python -m src.models.train_classifier."
+                ),
+            )
         _artifacts["bundle"] = bundle
         _artifacts["explainer"] = explainer
         return bundle, explainer

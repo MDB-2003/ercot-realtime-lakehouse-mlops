@@ -8,9 +8,9 @@ ercot_lakehouse:
       account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
       user: "{{ env_var('SNOWFLAKE_USER') }}"
       password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
-      role: "{{ env_var('SNOWFLAKE_ROLE', 'ACCOUNTADMIN') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE') }}"
       warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
-      database: "{{ env_var('SNOWFLAKE_DATABASE', 'HEALTHCARE_LAKEHOUSE') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'ERCOT_LAKEHOUSE') }}"
       schema: SILVER
       threads: 4
       client_session_keep_alive: true

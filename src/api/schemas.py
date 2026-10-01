@@ -37,6 +37,10 @@ SPIKE_FEATURE_COLUMNS: tuple[str, ...] = (
     "hour_of_day",
     "day_of_week",
 )
+# Label is a Houston LMP above $250 at some SCED interval in (t+5min, t+60min].
+# The same-row is_spike_250 flag is not a model target: it is a function of the Houston price feature.
+SPIKE_TARGET_COLUMN = "is_spike_250_within_60min"
+SPIKE_FORECAST_HORIZON_MINUTES = 60
 _MW_TOLERANCE = 0.05
 _MONEY_TOLERANCE = Decimal("0.01")
 
@@ -214,13 +218,13 @@ class FeatureAttribution(StrictModel):
 
 
 class ShapAttributionPayload(StrictModel):
-    """Top three SHAP attributions for one binary spike prediction."""
+    """Top three SHAP attributions for a 60-minute-ahead spike probability."""
 
     prediction_id: UUID = Field(default_factory=uuid4)
     model_name: str = Field(min_length=1, max_length=128)
     model_version: str = Field(min_length=1, max_length=64)
     as_of_utc: datetime
-    horizon_minutes: int = Field(ge=60, le=120)
+    horizon_minutes: Literal[60] = SPIKE_FORECAST_HORIZON_MINUTES
     probability_spike_250: float = Field(ge=0.0, le=1.0)
     predicted_positive: bool
     decision_threshold: float = Field(gt=0.0, lt=1.0)
@@ -266,12 +270,13 @@ class SpikeFeatureVector(StrictModel):
 
 
 class PredictResponse(StrictModel):
-    """Binary spike alert from ``predict_proba`` on one feature vector."""
+    """Probability that HB_HOUSTON exceeds $250/MWh within the next 60 minutes."""
 
     model_name: str = Field(min_length=1, max_length=128)
     probability_spike_250: float = Field(ge=0.0, le=1.0)
     spike_alert: bool
     decision_threshold: float = Field(gt=0.0, lt=1.0)
+    horizon_minutes: Literal[60] = SPIKE_FORECAST_HORIZON_MINUTES
 
     @model_validator(mode="after")
     def _alert_matches_threshold(self) -> PredictResponse:
@@ -302,6 +307,7 @@ class ExplainResponse(StrictModel):
 
     model_name: str = Field(min_length=1, max_length=128)
     probability_spike_250: float = Field(ge=0.0, le=1.0)
+    horizon_minutes: Literal[60] = SPIKE_FORECAST_HORIZON_MINUTES
     base_value: float
     contributions: list[FeatureContribution] = Field(min_length=1)
 
@@ -320,10 +326,10 @@ class ExplainResponse(StrictModel):
 
 
 class ForecastRequest(StrictModel):
-    """Current telemetry vector for P(LMP > $250/MWh)."""
+    """Current telemetry vector for P(HB_HOUSTON > $250/MWh within 60 minutes)."""
 
     as_of_utc: datetime
-    horizon_minutes: int = Field(default=60, ge=60, le=120)
+    horizon_minutes: Literal[60] = SPIKE_FORECAST_HORIZON_MINUTES
     decision_threshold: float = Field(default=0.50, gt=0.0, lt=1.0)
     features: SpikeFeatureVector
 
